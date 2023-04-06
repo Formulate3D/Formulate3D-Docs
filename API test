@@ -1,0 +1,165 @@
+from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify
+from flask_login import login_required, current_user
+from sqlalchemy.sql import func
+from . import db
+from .models import User, Printer, APIKEY
+import json
+
+api = Blueprint('api', __name__)
+
+### printers
+
+'http://127.0.0.1:5000/api/printers?pnt=ALL'
+@api.route('/api/printers', methods=['GET'])
+def query_database():
+    arg = request.args.get('pnt')
+    if arg == 'ALL':
+        printers = {}
+        for item in Printer.query.all():
+            block =     {
+                            'name': item.name,
+                            'ip': item.ip,
+                            'port': item.port,
+                            'status': item.status,
+                            'error': item.error,
+                            'manufacturer': item.manufacturer,
+                            'printer_model': item.printer_model,
+                            'nozzle_diameter': item.nozzle_diameter,
+                            'heated_bed': item.heated_bed,
+                            'bed_temp': item.bed_temp,
+                            'first_conn': str(item.first_conn),
+                            'last_conn': str(item.last_conn)
+                            }
+            key = item.id
+            pack = dict.fromkeys(str(key), block)
+            printers.update(pack)
+        output = json.dumps(printers)
+        return output
+    else:
+        try:
+            printer = Printer.query.filter_by(id=int(arg)).first()
+            data = {'id': printer.id,
+                                'name': printer.name,
+                                'ip': printer.ip,
+                                'port': printer.port,
+                                'status': printer.status,
+                                'error': printer.error,
+                                'manufacturer': printer.manufacturer,
+                                'printer_model': printer.printer_model,
+                                'nozzle_diameter': printer.nozzle_diameter,
+                                'heated_bed': printer.heated_bed,
+                                'bed_temp': printer.bed_temp,
+                                'first_conn': str(printer.first_conn),
+                                'last_conn': str(printer.last_conn)
+                                }
+            return json.dumps(data)
+        except:
+            return jsonify(message=f'No Printer: {arg} found')
+
+
+'HTTP//:/api/printer?id=WhatEverIDIs&key=WhatEverTheKeyIs&U=UserName&json={}'
+"http://127.0.0.1:5000/api/printers?id=2&key=f46c80b2b55d4a74a474f65c4448a2c7&u=admin&json={'status' : OK}"
+
+@api.route('/api/printers', methods=['PATCH']) ######## doesn't work
+def update_entry():
+    id = request.args.get('id')
+    key = request.args.get('key')
+    u = request.args.get('u')
+    data = request.args.get('json')
+    Akey = APIKEY.query.filter_by(key=key).first()
+    if Akey.verify(u, key) == True: #### make the key something long, User can set these up, but a defult will be provided 
+            try:
+                printer = Printer.query.filter_by(id=id).first()
+                if printer == None:
+                    return jsonify(message=f"Printer: {id} was not found, are you sure that's the right ID?")
+                printer.upDate(str(data))
+                return jsonify(message='Success')
+            except:
+                jsonify(message=f'An error occured while updating Printer: {id}')
+    else:
+        return jsonify(message=f'The key provided was invalid :(')
+    
+
+
+'HTTP//:/api/printer?id=WhatEverIDIs&key=WhatEverTheKeyIs&U=UserName'
+@api.route('/api/printers', methods=['DELETE'])
+def remove_entry():
+    ids = request.args.get('id')
+    key = request.args.get('key')
+    u = request.args.get('u')
+    Akey = APIKEY.query.filter_by(key=key).first()
+    if Akey.verify(u, key) == True: #### make the key something long, User can set these up, but a defult will be provided 
+            try:
+                printer = Printer.query.filter_by(id=ids).first()
+                db.session.delete(printer)
+                db.session.commit()
+                return jsonify(message=f'Printer: {ids} was removed successfully')
+            except:
+                return jsonify(message=f"Printer: {ids} was not found, are you sure that's the right ID?")
+    elif Akey.verify(u, key) == 'Key TIMEOUT':
+        return jsonify(message=f'Key Timed out')
+    else:
+        return jsonify(message=f'The key provided was invalid :(')
+
+
+### APIKEYS
+
+
+
+@api.route('/APIKEYS', methods=['POST', 'GET'])
+@login_required
+def APIKEYS():
+    if request.method == 'GET':
+        return render_template('apikeys.html', user=current_user, KEYS = APIKEY, users = User)
+    if request.method == 'POST':
+        return redirect(url_for('api.make_key'))
+
+
+@api.route('/make_key', methods=['GET', 'POST'])
+@login_required
+def make_key():
+    if request.method == 'POST':
+        userid = current_user.id
+        password = request.form.get('password')
+        user = User.query.filter_by(id=userid).first()
+            
+        if APIKEY.check_aval(userid) == False:
+            flash('Users can only have 1 key at a time', category='error')
+            return redirect(url_for('api.APIKEYS'))
+            
+        elif APIKEY.check_aval(userid) == True:
+            if user.check_pass(password) == False:
+                flash('Password was incorrecct', category='error')
+                return render_template('makeKey.html', user=current_user)
+            
+            elif user.check_pass(password) == True:
+                try:
+                    new_key = APIKEY(userid, password)
+                    db.session.add(new_key)
+                    db.session.commit()
+                    flash(f'Key created: {new_key.key}', category='success')
+                    return redirect(url_for('api.APIKEYS'))
+                except:
+                    flash('There was an error while making a key', category='error')
+                    return render_template('makeKey.html', user=current_user)
+
+    if request.method == 'GET':
+        return render_template('makeKey.html', user=current_user)
+          
+
+
+
+
+@api.route('/delete-key', methods=['POST'])
+def delete_key():
+    key = json.loads(request.data)
+    keyid = key['keyID']
+    key = APIKEY.query.get(keyid)
+    if key:
+        if current_user.user_type == 'admin':
+            db.session.delete(key)
+            db.session.commit()
+            flash(f'Key: {keyid} was removed', category='success')
+            return jsonify({})
+        else:
+            flash('Only Admins can remove Keys', category='error')
